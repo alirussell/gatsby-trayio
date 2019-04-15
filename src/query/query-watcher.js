@@ -17,10 +17,7 @@ const { store, emitter } = require(`../redux/`)
 const { boundActionCreators } = require(`../redux/actions`)
 const queryCompiler = require(`./query-compiler`).default
 const report = require(`gatsby-cli/lib/reporter`)
-const {
-  queueQueryForPathname,
-  runQueuedQueries,
-} = require(`./page-query-runner`)
+const queryRunner = require(`./index`)
 const debug = require(`debug`)(`gatsby:query-watcher`)
 
 const getQueriesSnapshot = () => {
@@ -45,9 +42,9 @@ const handleComponentsWithRemovedQueries = (
       debug(`Static query was removed from ${c.componentPath}`)
       store.dispatch({
         type: `REMOVE_STATIC_QUERY`,
-        payload: c.jsonName,
+        payload: c.id,
       })
-      boundActionCreators.deleteComponentsDependencies([c.jsonName])
+      boundActionCreators.deleteComponentsDependencies([c.id])
     }
   })
 }
@@ -60,7 +57,7 @@ const handleQuery = (
   // If this is a static query
   // Add action / reducer + watch staticquery files
   if (query.isStaticQuery) {
-    const oldQuery = staticQueryComponents.get(query.jsonName)
+    const oldQuery = staticQueryComponents.get(query.id)
     const isNewQuery = !oldQuery
 
     // Compare query text because text is compiled query with any attached
@@ -74,10 +71,9 @@ const handleQuery = (
       oldQuery.text !== query.text
     ) {
       boundActionCreators.replaceStaticQuery({
+        id: query.id,
         name: query.name,
         componentPath: query.path,
-        id: query.jsonName,
-        jsonName: query.jsonName,
         query: query.text,
         hash: query.hash,
       })
@@ -88,8 +84,8 @@ const handleQuery = (
         }.`
       )
 
-      boundActionCreators.deleteComponentsDependencies([query.jsonName])
-      queueQueryForPathname(query.jsonName)
+      boundActionCreators.deleteComponentsDependencies([query.id])
+      queryRunner.enqueueExtractedQueryId(query.id)
     }
     return true
   }
@@ -153,7 +149,7 @@ const updateStateAndRunQueries = isFirstRun => {
       `)
     }
 
-    runQueuedQueries()
+    queryRunner.runQueries()
 
     return null
   })
@@ -210,13 +206,13 @@ const queueQueriesForPageComponent = componentPath => {
   boundActionCreators.deleteComponentsDependencies(
     pages.map(p => p.path || p.id)
   )
-  pages.forEach(page => queueQueryForPathname(page.path))
-  runQueuedQueries()
+  pages.forEach(page => queryRunner.enqueueExtractedQueryId(page.path))
+  queryRunner.runQueries()
 }
 
 const runQueryForPage = path => {
-  queueQueryForPathname(path)
-  runQueuedQueries()
+  queryRunner.enqueueExtractedQueryId(path)
+  queryRunner.runQueries()
 }
 
 exports.queueQueriesForPageComponent = queueQueriesForPageComponent

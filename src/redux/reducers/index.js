@@ -30,6 +30,7 @@ module.exports = {
   flattenedPlugins: require(`./flattened-plugins`),
   config: require(`./config`),
   pages: require(`./pages`),
+  matchPaths: require(`./match-paths`),
   schema: require(`./schema`),
   status: require(`./status`),
   componentDataDependencies: require(`./component-data-dependencies`),
@@ -37,9 +38,9 @@ module.exports = {
   staticQueryComponents: require(`./static-query-components`),
   jobs: require(`./jobs`),
   webpack: require(`./webpack`),
+  webpackCompilationHash: require(`./webpack-compilation-hash`),
   redirects: require(`./redirects`),
   babelrc: require(`./babelrc`),
-  jsonDataPaths: require(`./json-data-paths`),
   schemaCustomization: require(`./schema-customization`),
   themes: require(`./themes`),
 }

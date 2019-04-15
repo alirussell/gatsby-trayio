@@ -119,9 +119,7 @@ const collatePluginAPIs = ({
     // the plugin node itself *and* in an API to plugins map for faster lookups
     // later.
 
-    const pluginNodeExports = resolveModuleExports(`${plugin.resolve}/gatsby-node`, {
-      mode: `require`
-    });
+    const pluginNodeExports = resolveModuleExports(`${plugin.resolve}/gatsby-node`);
     const pluginBrowserExports = resolveModuleExports(`${plugin.resolve}/gatsby-browser`);
     const pluginSSRExports = resolveModuleExports(`${plugin.resolve}/gatsby-ssr`);
 

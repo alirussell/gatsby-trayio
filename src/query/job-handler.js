@@ -2,31 +2,18 @@
 
 import { graphql as graphqlFunction } from "graphql"
 const fs = require(`fs-extra`)
-const report = require(`gatsby-cli/lib/reporter`)
-
 const path = require(`path`)
+const report = require(`gatsby-cli/lib/reporter`)
+const { boundActionCreators } = require(`../redux/actions`)
 const { store } = require(`../redux`)
 const withResolverContext = require(`../schema/context`)
-const { generatePathChunkName } = require(`../utils/js-chunk-names`)
 const { formatErrorDetails } = require(`./utils`)
-const mod = require(`hash-mod`)(999)
-const { boundActionCreators } = require(`../redux/actions`)
+const pageDataUtil = require(`../utils/page-data`)
 
 const resultHashes = {}
 
-type QueryJob = {
-  id: string,
-  hash?: string,
-  jsonName: string,
-  query: string,
-  componentPath: string,
-  context: Object,
-  isPage: Boolean,
-}
-
-// Run query
-module.exports = async (queryJob: QueryJob) => {
-  const { schema, program } = store.getState()
+const jobHandler = async ({ queryJob }) => {
+  const { schema, program, pages, webpackCompilationHash } = store.getState()
 
   const graphql = (query, context) =>
     graphqlFunction(
@@ -74,7 +61,6 @@ ${formatErrorDetails(errorDetails)}`)
 
   // Delete internal data from pageContext
   if (result.pageContext) {
-    delete result.pageContext.jsonName
     delete result.pageContext.path
     delete result.pageContext.internalComponentName
     delete result.pageContext.component
@@ -91,53 +77,27 @@ ${formatErrorDetails(errorDetails)}`)
     .createHash(`sha1`)
     .update(resultJSON)
     .digest(`base64`)
-    // Remove potentially unsafe characters. This increases chances of collisions
-    // slightly but it should still be very safe + we get a shorter
-    // url vs hex.
-    .replace(/[^a-zA-Z0-9-_]/g, ``)
-
-  let dataPath
-  if (queryJob.isPage) {
-    dataPath = `${generatePathChunkName(queryJob.jsonName)}-${resultHash}`
-  } else {
-    dataPath = queryJob.hash
-  }
 
   if (resultHashes[queryJob.id] !== resultHash) {
     resultHashes[queryJob.id] = resultHash
-    let modInt = ``
-    // We leave StaticQuery results at public/static/d
-    // as the babel plugin has that path hard-coded
-    // for importing static query results.
+
+    const publicDir = path.join(program.directory, `public`)
     if (queryJob.isPage) {
-      modInt = mod(dataPath).toString()
+      const page = pages.get(queryJob.id)
+      await pageDataUtil.write(
+        { publicDir },
+        page,
+        result,
+        webpackCompilationHash
+      )
+    } else {
+      const staticDir = path.join(publicDir, `static`)
+      const resultPath = path.join(staticDir, `d`, `${queryJob.hash}.json`)
+      await fs.outputFile(resultPath, resultJSON)
     }
-
-    // Always write file to public/static/d/ folder.
-    const resultPath = path.join(
-      program.directory,
-      `public`,
-      `static`,
-      `d`,
-      modInt,
-      `${dataPath}.json`
-    )
-
-    if (queryJob.isPage) {
-      dataPath = `${modInt}/${dataPath}`
-    }
-
-    await fs.outputFile(resultPath, resultJSON)
-
-    store.dispatch({
-      type: `SET_JSON_DATA_PATH`,
-      payload: {
-        key: queryJob.jsonName,
-        value: dataPath,
-      },
-    })
   }
 
+  // Send event that the page query finished.
   boundActionCreators.pageQueryRun({
     path: queryJob.id,
     componentPath: queryJob.componentPath,
@@ -146,3 +106,5 @@ ${formatErrorDetails(errorDetails)}`)
 
   return result
 }
+
+module.exports = jobHandler

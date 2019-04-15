@@ -114,8 +114,10 @@ function () {
       });
     };
 
-    port = yield detectPortInUseAndPrompt(port, rlInterface);
-    startListening();
+    detectPortInUseAndPrompt(port, rlInterface, newPort => {
+      port = newPort;
+      startListening();
+    });
   });
 
   return function (_x) {

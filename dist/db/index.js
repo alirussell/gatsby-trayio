@@ -50,7 +50,6 @@ const saveStateDebounced = _.debounce(saveState, 1000);
 
 
 function startAutosave() {
-  saveStateDebounced();
   emitter.on(`*`, () => saveStateDebounced());
 }
 

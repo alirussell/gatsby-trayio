@@ -47,10 +47,9 @@ const preferDefault = require(`./prefer-default`);
 
 const nodeTracking = require(`../db/node-tracking`);
 
-const withResolverContext = require(`../schema/context`); // Add `util.promisify` polyfill for old node versions
+const withResolverContext = require(`../schema/context`);
 
-
-require(`util.promisify/shim`)(); // Show stack trace on unhandled promises.
+require(`../db`).startAutosave(); // Show stack trace on unhandled promises.
 
 
 process.on(`unhandledRejection`, (reason, p) => {
@@ -60,14 +59,10 @@ process.on(`unhandledRejection`, (reason, p) => {
 const _require3 = require(`../query/query-watcher`),
       extractQueries = _require3.extractQueries;
 
-const _require4 = require(`../query/page-query-runner`),
-      runInitialQueries = _require4.runInitialQueries;
+const writeJsRequires = require(`./write-js-requires`);
 
-const _require5 = require(`../query/pages-writer`),
-      writePages = _require5.writePages;
-
-const _require6 = require(`./redirects-writer`),
-      writeRedirects = _require6.writeRedirects; // Override console.log to add the source file + line number.
+const _require4 = require(`./redirects-writer`),
+      writeRedirects = _require4.writeRedirects; // Override console.log to add the source file + line number.
 // Useful for debugging if you lose a console.log somewhere.
 // Otherwise leave commented out.
 // require(`./log-line-function`)
@@ -161,8 +156,11 @@ function () {
     const hashes = yield Promise.all([md5File(`package.json`), Promise.resolve(md5File(`${program.directory}/gatsby-config.js`).catch(() => {})), // ignore as this file isn't required),
     Promise.resolve(md5File(`${program.directory}/gatsby-node.js`).catch(() => {}))]);
     const pluginsHash = crypto.createHash(`md5`).update(JSON.stringify(pluginVersions.concat(hashes))).digest(`hex`);
-    let state = store.getState();
-    const oldPluginsHash = state && state.status ? state.status.PLUGINS_HASH : ``; // Check if anything has changed. If it has, delete the site's .cache
+
+    const _store$getState = store.getState(),
+          status = _store$getState.status;
+
+    const oldPluginsHash = status ? status.PLUGINS_HASH : ``; // Check if anything has changed. If it has, delete the site's .cache
     // directory and tell reducers to empty themselves.
     //
     // Also if the hash isn't there, then delete things just in case something
@@ -410,90 +408,17 @@ function () {
     });
     activity.start();
     yield extractQueries();
-    activity.end(); // Start the createPages hot reloader.
-
-    if (process.env.NODE_ENV !== `production`) {
-      require(`./page-hot-reloader`)(graphqlRunner);
-    } // Run queries
-
-
-    activity = report.activityTimer(`run graphql queries`, {
-      parentSpan: bootstrapSpan
-    });
-    activity.start();
-    yield runInitialQueries(activity);
     activity.end();
 
-    require(`../redux/actions`).boundActionCreators.setProgramStatus(`BOOTSTRAP_QUERY_RUNNING_FINISHED`); // Write out files.
-
-
-    activity = report.activityTimer(`write out page data`, {
-      parentSpan: bootstrapSpan
-    });
-    activity.start();
-
     try {
-      yield writePages();
+      yield writeJsRequires.writeAll(store.getState());
     } catch (err) {
       report.panic(`Failed to write out page data`, err);
     }
 
-    activity.end(); // Write out redirects.
+    yield writeRedirects(); // onPostBootstrap
 
-    activity = report.activityTimer(`write out redirect data`, {
-      parentSpan: bootstrapSpan
-    });
-    activity.start();
-    yield writeRedirects();
-    activity.end();
-    let onEndJob;
-
-    const checkJobsDone = _.debounce(
-    /*#__PURE__*/
-    function () {
-      var _ref2 = (0, _asyncToGenerator2.default)(function* (resolve) {
-        const state = store.getState();
-
-        if (state.jobs.active.length === 0) {
-          emitter.off(`END_JOB`, onEndJob);
-          yield finishBootstrap(bootstrapSpan);
-          resolve({
-            graphqlRunner
-          });
-        }
-      });
-
-      return function (_x2) {
-        return _ref2.apply(this, arguments);
-      };
-    }(), 100);
-
-    if (store.getState().jobs.active.length === 0) {
-      yield finishBootstrap(bootstrapSpan);
-      return {
-        graphqlRunner
-      };
-    } else {
-      return new Promise(resolve => {
-        // Wait until all side effect jobs are finished.
-        onEndJob = () => checkJobsDone(resolve);
-
-        emitter.on(`END_JOB`, onEndJob);
-      });
-    }
-  });
-
-  return function (_x) {
-    return _ref.apply(this, arguments);
-  };
-}();
-
-const finishBootstrap =
-/*#__PURE__*/
-function () {
-  var _ref3 = (0, _asyncToGenerator2.default)(function* (bootstrapSpan) {
-    // onPostBootstrap
-    const activity = report.activityTimer(`onPostBootstrap`, {
+    activity = report.activityTimer(`onPostBootstrap`, {
       parentSpan: bootstrapSpan
     });
     activity.start();
@@ -509,10 +434,13 @@ function () {
     require(`../redux/actions`).boundActionCreators.setProgramStatus(`BOOTSTRAP_FINISHED`);
 
     bootstrapSpan.finish();
+    return {
+      graphqlRunner
+    };
   });
 
-  return function finishBootstrap(_x3) {
-    return _ref3.apply(this, arguments);
+  return function (_x) {
+    return _ref.apply(this, arguments);
   };
 }();
 //# sourceMappingURL=index.js.map

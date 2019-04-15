@@ -1,45 +1,33 @@
 "use strict";
 
-var _interopRequireDefault = require("@babel/runtime/helpers/interopRequireDefault");
+const detect = require(`detect-port`);
 
-var _asyncToGenerator2 = _interopRequireDefault(require("@babel/runtime/helpers/asyncToGenerator"));
+const report = require(`gatsby-cli/lib/reporter`); // Checks if a port is in use and prompts the user to enter another one
+// Then calls callback with new port
 
-const _require = require(`util`),
-      promisify = _require.promisify;
 
-const detectPort = promisify(require(`detect-port`));
-
-const report = require(`gatsby-cli/lib/reporter`);
-
-const readlinePort = (port, rlInterface) => {
-  const question = `Something is already running at port ${port} \nWould you like to run the app at another port instead? [Y/n] `;
-  return new Promise(resolve => {
-    rlInterface.question(question, answer => {
-      resolve(answer.length === 0 || answer.match(/^yes|y$/i));
-    });
-  });
-};
-
-const detectPortInUseAndPrompt =
-/*#__PURE__*/
-function () {
-  var _ref = (0, _asyncToGenerator2.default)(function* (port, rlInterface) {
-    let foundPort = port;
-    const detectedPort = yield detectPort(port).catch(err => report.panic(err));
-
-    if (port !== detectedPort) {
-      if (yield readlinePort(port, rlInterface)) {
-        foundPort = detectedPort;
-      }
+const detectPortInUseAndPrompt = (port, rlInterface, callback) => {
+  let newPort = port;
+  detect(port, (err, _port) => {
+    if (err) {
+      report.panic(err);
     }
 
-    return foundPort;
-  });
+    if (port !== _port) {
+      // eslint-disable-next-line max-len
+      const question = `Something is already running at port ${port} \nWould you like to run the app at another port instead? [Y/n] `;
+      rlInterface.question(question, answer => {
+        if (answer.length === 0 || answer.match(/^yes|y$/i)) {
+          newPort = _port;
+        }
 
-  return function detectPortInUseAndPrompt(_x, _x2) {
-    return _ref.apply(this, arguments);
-  };
-}();
+        callback(newPort);
+      });
+    } else {
+      callback(newPort);
+    }
+  });
+};
 
 module.exports = detectPortInUseAndPrompt;
 //# sourceMappingURL=detect-port-in-use-and-prompt.js.map

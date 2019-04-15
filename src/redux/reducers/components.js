@@ -81,27 +81,14 @@ module.exports = (state = new Map(), action) => {
     case `QUERY_EXTRACTION_BABEL_SUCCESS`:
     case `QUERY_EXTRACTION_BABEL_ERROR`:
     case `QUERY_EXTRACTION_GRAPHQL_ERROR`: {
-      let servicesToSendEventTo
-      if (
-        typeof action.payload.componentPath !== `string` &&
-        action.type === `QUERY_EXTRACTION_GRAPHQL_ERROR`
-      ) {
-        // if this is globabl query extraction error, send it to all page component services
-        servicesToSendEventTo = services
-      } else {
-        action.payload.componentPath = normalize(action.payload.componentPath)
-        servicesToSendEventTo = [
-          services.get(action.payload.componentPath),
-        ].filter(Boolean)
-      }
-
-      servicesToSendEventTo.forEach(service =>
+      action.payload.componentPath = normalize(action.payload.componentPath)
+      const service = services.get(action.payload.componentPath)
+      if (service) {
         service.send({
           type: action.type,
           ...action.payload,
         })
-      )
-
+      }
       return state
     }
     case `PAGE_QUERY_RUN`: {

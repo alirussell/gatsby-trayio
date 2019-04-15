@@ -224,7 +224,7 @@ const fileByPath = (source, args, context, info) => {
   // like markdown which would be a child node of a File node).
 
 
-  const parentFileNode = context.nodeModel.findRootNodeAncestor(source, node => node.internal && node.internal.type === `File`); // Find the linked File node(s)
+  const parentFileNode = context.nodeModel.findRootNodeAncestor(source); // Find the linked File node(s)
 
   if (isArray) {
     return Promise.all(fieldValue.map(findLinkedFileNode));

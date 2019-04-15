@@ -13,8 +13,18 @@ const _require2 = require(`../utils/babel-parse-to-ast`),
       babelParseToAst = _require2.babelParseToAst;
 
 const report = require(`gatsby-cli/lib/reporter`);
+/**
+ * Given a `require.resolve()` compatible path pointing to a JS module,
+ * return an array listing the names of the module's exports.
+ *
+ * Returns [] for invalid paths and modules without exports.
+ *
+ * @param {string} modulePath
+ * @param {function} resolver
+ */
 
-const staticallyAnalyzeExports = (modulePath, resolver = require.resolve) => {
+
+module.exports = (modulePath, resolver = require.resolve) => {
   let absPath;
   const exportNames = [];
 
@@ -97,31 +107,5 @@ https://gatsby.dev/no-mixed-modules
   }
 
   return exportNames;
-};
-/**
- * Given a `require.resolve()` compatible path pointing to a JS module,
- * return an array listing the names of the module's exports.
- *
- * Returns [] for invalid paths and modules without exports.
- *
- * @param {string} modulePath
- * @param {string} mode
- * @param {function} resolver
- */
-
-
-module.exports = (modulePath, {
-  mode = `analysis`,
-  resolver
-} = {}) => {
-  if (mode === `require`) {
-    try {
-      return Object.keys(require(modulePath)).filter(exportName => exportName !== `__esModule`);
-    } catch (_unused) {
-      return [];
-    }
-  } else {
-    return staticallyAnalyzeExports(modulePath, resolver);
-  }
 };
 //# sourceMappingURL=resolve-module-exports.js.map

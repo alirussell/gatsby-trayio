@@ -1,5 +1,7 @@
 /* @flow */
 
+const _ = require(`lodash`)
+const path = require(`path`)
 const report = require(`gatsby-cli/lib/reporter`)
 const buildHTML = require(`./build-html`)
 const buildProductionBundle = require(`./build-javascript`)
@@ -7,12 +9,14 @@ const bootstrap = require(`../bootstrap`)
 const apiRunnerNode = require(`../utils/api-runner-node`)
 const { copyStaticDirs } = require(`../utils/get-static-dir`)
 const { initTracer, stopTracer } = require(`../utils/tracer`)
-const db = require(`../db`)
 const chalk = require(`chalk`)
 const tracer = require(`opentracing`).globalTracer()
 const signalExit = require(`signal-exit`)
 const telemetry = require(`gatsby-telemetry`)
-const { store } = require(`../redux`)
+const queryRunner = require(`../query`)
+const { store, emitter } = require(`../redux`)
+const db = require(`../db`)
+const pageDataUtil = require(`../utils/page-data`)
 
 function reportFailure(msg, err: Error) {
   report.log(``)
@@ -27,7 +31,22 @@ type BuildArgs = {
   openTracingConfigFile: string,
 }
 
+const handleChangedCompilationHash = async (state, pageQueryIds, newHash) => {
+  const publicDir = path.join(state.program.directory, `public`)
+  const stalePaths = _.difference([...state.pages.keys()], pageQueryIds)
+  await pageDataUtil.rewriteCompilationHashes(
+    { publicDir },
+    stalePaths,
+    newHash
+  )
+  store.dispatch({
+    type: `SET_WEBPACK_COMPILATION_HASH`,
+    payload: newHash,
+  })
+}
+
 module.exports = async function build(program: BuildArgs) {
+  let activity
   initTracer(program.openTracingConfigFile)
 
   telemetry.trackCli(`BUILD_START`)
@@ -43,7 +62,15 @@ module.exports = async function build(program: BuildArgs) {
     parentSpan: buildSpan,
   })
 
-  await db.saveState()
+  const queryIds = queryRunner.calcBootstrapDirtyQueryIds(store.getState())
+  const { staticQueryIds, pageQueryIds } = queryRunner.groupQueryIds(queryIds)
+
+  activity = report.activityTimer(`run static queries`, {
+    parentSpan: buildSpan,
+  })
+  activity.start()
+  await queryRunner.processStaticQueries(staticQueryIds, { activity })
+  activity.end()
 
   await apiRunnerNode(`onPreBuild`, {
     graphql: graphqlRunner,
@@ -54,28 +81,63 @@ module.exports = async function build(program: BuildArgs) {
   // an equivalent static directory within public.
   copyStaticDirs()
 
-  let activity
   activity = report.activityTimer(
     `Building production JavaScript and CSS bundles`,
     { parentSpan: buildSpan }
   )
   activity.start()
-  await buildProductionBundle(program).catch(err => {
+  const stats = await buildProductionBundle(program).catch(err => {
     reportFailure(`Generating JavaScript bundles failed`, err)
   })
   activity.end()
+
+  const webpackCompilationHash = stats.hash
+  if (webpackCompilationHash !== store.getState().webpackCompilationHash) {
+    activity = report.activityTimer(`Rewriting compilation hashes`, {
+      parentSpan: buildSpan,
+    })
+    activity.start()
+    await handleChangedCompilationHash(
+      store.getState(),
+      pageQueryIds,
+      webpackCompilationHash
+    )
+    activity.end()
+  }
+
+  activity = report.activityTimer(`run page queries`)
+  activity.start()
+  await queryRunner.processPageQueries(pageQueryIds, { activity })
+  activity.end()
+
+  const waitJobsFinished = () =>
+    new Promise((resolve, reject) => {
+      const onEndJob = () => {
+        if (store.getState().jobs.active.length === 0) {
+          resolve()
+          emitter.off(`END_JOB`, onEndJob)
+        }
+      }
+      emitter.on(`END_JOB`, onEndJob)
+      onEndJob()
+    })
+
+  await waitJobsFinished()
+
+  await db.saveState()
+
+  require(`../redux/actions`).boundActionCreators.setProgramStatus(
+    `BOOTSTRAP_QUERY_RUNNING_FINISHED`
+  )
 
   activity = report.activityTimer(`Building static HTML for pages`, {
     parentSpan: buildSpan,
   })
   activity.start()
   try {
-    await buildHTML.buildPages({
-      program,
-      stage: `build-html`,
-      pagePaths: [...store.getState().pages.keys()],
-      activity,
-    })
+    await buildHTML.buildRenderer(program, `build-html`)
+    const pagePaths = [...store.getState().pages.keys()]
+    await buildHTML.buildPages({ program, pagePaths, activity })
   } catch (err) {
     reportFailure(
       report.stripIndent`

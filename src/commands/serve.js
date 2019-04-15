@@ -111,6 +111,8 @@ module.exports = async program => {
     })
   }
 
-  port = await detectPortInUseAndPrompt(port, rlInterface)
-  startListening()
+  detectPortInUseAndPrompt(port, rlInterface, newPort => {
+    port = newPort
+    startListening()
+  })
 }

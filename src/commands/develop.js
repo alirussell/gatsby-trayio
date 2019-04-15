@@ -15,7 +15,7 @@ const rl = require(`readline`)
 const webpack = require(`webpack`)
 const webpackConfig = require(`../utils/webpack.config`)
 const bootstrap = require(`../bootstrap`)
-const { store } = require(`../redux`)
+const { store, emitter } = require(`../redux`)
 const { syncStaticDir } = require(`../utils/get-static-dir`)
 const buildHTML = require(`./build-html`)
 const { withBasePath } = require(`../utils/path`)
@@ -31,13 +31,13 @@ const getSslCert = require(`../utils/get-ssl-cert`)
 const slash = require(`slash`)
 const { initTracer } = require(`../utils/tracer`)
 const apiRunnerNode = require(`../utils/api-runner-node`)
-const db = require(`../db`)
 const telemetry = require(`gatsby-telemetry`)
+const queryRunner = require(`../query`)
+const queryWatcher = require(`../query/query-watcher`)
+const writeJsRequires = require(`../bootstrap/write-js-requires`)
+const db = require(`../db`)
 const detectPortInUseAndPrompt = require(`../utils/detect-port-in-use-and-prompt`)
 const onExit = require(`signal-exit`)
-const pageQueryRunner = require(`../query/page-query-runner`)
-const queryQueue = require(`../query/queue`)
-const queryWatcher = require(`../query/query-watcher`)
 
 // const isInteractive = process.stdout.isTTY
 
@@ -58,6 +58,78 @@ rlInterface.on(`SIGINT`, () => {
   process.exit()
 })
 
+function startQueryListener() {
+  const processing = new Set()
+  const waiting = new Map()
+
+  const betterQueueOptions = {
+    priority: (job, cb) => {
+      const activePaths = Array.from(websocketManager.activePaths.values())
+      if (job.id && activePaths.includes(job.id)) {
+        cb(null, 10)
+      } else {
+        cb(null, 1)
+      }
+    },
+    merge: (oldTask, newTask, cb) => {
+      cb(null, newTask)
+    },
+    filter: (job, cb) => {
+      if (processing.has(job.id)) {
+        waiting.set(job.id, job)
+        cb(`already running`)
+      } else {
+        cb(null, job)
+      }
+    },
+  }
+
+  const postHandler = async ({ queryJob, result }) => {
+    if (queryJob.isPage) {
+      websocketManager.emitPageData({
+        ...result,
+        id: queryJob.id,
+      })
+    } else {
+      websocketManager.emitStaticQueryData({
+        ...result,
+        id: queryJob.id,
+      })
+    }
+    processing.delete(queryJob.id)
+    if (waiting.has(queryJob.id)) {
+      queue.push(waiting.get(queryJob.id))
+      waiting.delete(queryJob.id)
+    }
+  }
+
+  const queue = queryRunner.createQueue({ postHandler, betterQueueOptions })
+  queryRunner.startListener(queue)
+}
+
+const runPageQueries = async queryIds => {
+  let activity = report.activityTimer(`run page queries`)
+  activity.start()
+  await queryRunner.processPageQueries(queryIds, { activity })
+  activity.end()
+
+  require(`../redux/actions`).boundActionCreators.setProgramStatus(
+    `BOOTSTRAP_QUERY_RUNNING_FINISHED`
+  )
+}
+
+const waitJobsFinished = () =>
+  new Promise((resolve, reject) => {
+    const onEndJob = () => {
+      if (store.getState().jobs.active.length === 0) {
+        resolve()
+        emitter.off(`END_JOB`, onEndJob)
+      }
+    }
+    emitter.on(`END_JOB`, onEndJob)
+    onEndJob()
+  })
+
 onExit(() => {
   telemetry.trackCli(`DEVELOP_STOP`)
 })
@@ -67,11 +139,8 @@ async function startServer(program) {
   const directoryPath = withBasePath(directory)
   const createIndexHtml = async () => {
     try {
-      await buildHTML.buildPages({
-        program,
-        stage: `develop-html`,
-        pagePaths: [`/`],
-      })
+      await buildHTML.buildRenderer(program, `develop-html`)
+      await buildHTML.buildPages({ program, pagePaths: [`/`] })
     } catch (err) {
       if (err.name !== `WebpackError`) {
         report.panic(err)
@@ -87,13 +156,6 @@ async function startServer(program) {
       )
     }
   }
-
-  // Start bootstrap process.
-  await bootstrap(program)
-
-  db.startAutosave()
-  pageQueryRunner.startListening(queryQueue.makeDevelop())
-  queryWatcher.startWatchDeletePage()
 
   await createIndexHtml()
 
@@ -147,6 +209,18 @@ async function startServer(program) {
       }
     })
   )
+
+  const mapToObject = map => {
+    const obj = {}
+    for (let [key, value] of map) {
+      obj[key] = value
+    }
+    return obj
+  }
+
+  app.get(`/___pages`, (req, res) => {
+    res.json(mapToObject(store.getState().pages))
+  })
 
   // Allow requests from any origin. Avoids CORS issues when using the `--host` flag.
   app.use((req, res, next) => {
@@ -303,9 +377,11 @@ module.exports = async (program: any) => {
     })
   }
 
-  program.port = await detectPortInUseAndPrompt(port, rlInterface)
-
-  const [compiler] = await startServer(program)
+  program.port = await new Promise(resolve => {
+    detectPortInUseAndPrompt(port, rlInterface, newPort => {
+      resolve(newPort)
+    })
+  })
 
   function prepareUrls(protocol, host, port) {
     const formatUrl = hostname =>
@@ -441,7 +517,31 @@ module.exports = async (program: any) => {
     })
   }
 
+  // Start bootstrap process.
+  const { graphqlRunner } = await bootstrap(program)
+
+  // Start the createPages hot reloader.
+  require(`../bootstrap/page-hot-reloader`)(graphqlRunner)
+
+  const queryIds = queryRunner.calcBootstrapDirtyQueryIds(store.getState())
+  const { staticQueryIds, pageQueryIds } = queryRunner.groupQueryIds(queryIds)
+  let activity = report.activityTimer(`run static queries`)
+  activity.start()
+  await queryRunner.processStaticQueries(staticQueryIds, { activity })
+  activity.end()
+
+  await runPageQueries(pageQueryIds)
+  await waitJobsFinished()
+  await writeJsRequires.startPageListener()
+  await db.saveState()
+  db.startAutosave()
+  startQueryListener()
+  queryWatcher.startWatchDeletePage()
+
+  const [compiler] = await startServer(program)
+
   let isFirstCompile = true
+
   // "done" event fires when Webpack has finished recompiling the bundle.
   // Whether or not you have warnings or errors, you will get this event.
   compiler.hooks.done.tapAsync(`print getsby instructions`, (stats, done) => {

@@ -11,7 +11,7 @@ exports.onCreateWebpackConfig = (
       resolve: {
         plugins: [
           new GatsbyThemeComponentShadowingResolverPlugin({
-            themes: themes.themes,
+            themes: themes.themes.map(({ themeName }) => themeName),
             projectRoot: program.directory,
           }),
         ],

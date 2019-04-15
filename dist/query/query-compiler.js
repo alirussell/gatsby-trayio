@@ -228,7 +228,7 @@ class Runner {
         };
 
         if (query.isStaticQuery) {
-          query.jsonName = `sq--` + _.kebabCase(`${_path.default.relative(_redux.store.getState().program.directory, filePath)}`);
+          query.id = `sq--` + _.kebabCase(`${_path.default.relative(_redux.store.getState().program.directory, filePath)}`);
         }
 
         if (query.isHook && process.env.NODE_ENV === `production` && typeof require(`react`).useContext !== `function`) {

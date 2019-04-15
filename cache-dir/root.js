@@ -8,9 +8,8 @@ import {
   RouteUpdates,
 } from "./navigation"
 import { apiRunner } from "./api-runner-browser"
-import syncRequires from "./sync-requires"
-import pages from "./pages.json"
 import loader from "./loader"
+import devLoader from "./dev-loader"
 import JSONStore from "./json-store"
 import EnsureResources from "./ensure-resources"
 
@@ -38,12 +37,10 @@ navigationInit()
 class RouteHandler extends React.Component {
   render() {
     let { location } = this.props
+    const pages = devLoader.getPagesManifest()
+    const pagePaths = Object.keys(pages)
 
-    // check if page exists - in dev pages are sync loaded, it's safe to use
-    // loader.getPage
-    let page = loader.getPage(location.pathname)
-
-    if (page) {
+    if (!loader.isPageNotFound(location.pathname)) {
       return (
         <EnsureResources location={location}>
           {locationAndPageResources => (
@@ -52,24 +49,20 @@ class RouteHandler extends React.Component {
                 location={location}
                 shouldUpdateScroll={shouldUpdateScroll}
               >
-                <JSONStore
-                  pages={pages}
-                  {...this.props}
-                  {...locationAndPageResources}
-                />
+                <JSONStore {...this.props} {...locationAndPageResources} />
               </ScrollContext>
             </RouteUpdates>
           )}
         </EnsureResources>
       )
     } else {
-      const dev404Page = pages.find(p => /^\/dev-404-page\/?$/.test(p.path))
-      const Dev404Page = syncRequires.components[dev404Page.componentChunkName]
+      const dev404Page = loader.getPage(`/dev-404-page/`)
+      const Dev404Page = dev404Page.component
 
       if (!loader.getPage(`/404.html`)) {
         return (
           <RouteUpdates location={location}>
-            <Dev404Page pages={pages} {...this.props} />
+            <Dev404Page {...this.props} pagePaths={pagePaths} />
           </RouteUpdates>
         )
       }
@@ -79,13 +72,9 @@ class RouteHandler extends React.Component {
           {locationAndPageResources => (
             <RouteUpdates location={location}>
               <Dev404Page
-                pages={pages}
+                pagePaths={pagePaths}
                 custom404={
-                  <JSONStore
-                    pages={pages}
-                    {...this.props}
-                    {...locationAndPageResources}
-                  />
+                  <JSONStore {...this.props} {...locationAndPageResources} />
                 }
                 {...this.props}
               />

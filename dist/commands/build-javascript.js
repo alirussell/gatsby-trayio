@@ -28,7 +28,7 @@ function () {
           return;
         }
 
-        resolve();
+        resolve(stats);
       });
     });
   });

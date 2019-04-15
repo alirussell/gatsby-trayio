@@ -1,25 +1,30 @@
-const { promisify } = require(`util`)
-const detectPort = promisify(require(`detect-port`))
+const detect = require(`detect-port`)
 const report = require(`gatsby-cli/lib/reporter`)
 
-const readlinePort = (port, rlInterface) => {
-  const question = `Something is already running at port ${port} \nWould you like to run the app at another port instead? [Y/n] `
-  return new Promise(resolve => {
-    rlInterface.question(question, answer => {
-      resolve(answer.length === 0 || answer.match(/^yes|y$/i))
-    })
-  })
-}
+// Checks if a port is in use and prompts the user to enter another one
+// Then calls callback with new port
+const detectPortInUseAndPrompt = (port, rlInterface, callback) => {
+  let newPort = port
 
-const detectPortInUseAndPrompt = async (port, rlInterface) => {
-  let foundPort = port
-  const detectedPort = await detectPort(port).catch(err => report.panic(err))
-  if (port !== detectedPort) {
-    if (await readlinePort(port, rlInterface)) {
-      foundPort = detectedPort
+  detect(port, (err, _port) => {
+    if (err) {
+      report.panic(err)
     }
-  }
-  return foundPort
+
+    if (port !== _port) {
+      // eslint-disable-next-line max-len
+      const question = `Something is already running at port ${port} \nWould you like to run the app at another port instead? [Y/n] `
+
+      rlInterface.question(question, answer => {
+        if (answer.length === 0 || answer.match(/^yes|y$/i)) {
+          newPort = _port
+        }
+        callback(newPort)
+      })
+    } else {
+      callback(newPort)
+    }
+  })
 }
 
 module.exports = detectPortInUseAndPrompt

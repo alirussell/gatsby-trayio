@@ -12,43 +12,22 @@ const _require = require(`../redux`),
 const fs = require(`fs`);
 
 /**
- * Get cached query result for given data path.
- * @param {string} dataFileName Cached query result filename.
- * @param {string} directory Root directory of current project.
- */
-const readCachedResults = (dataFileName, directory) => {
-  const filePath = path.join(directory, `public`, `static`, `d`, `${dataFileName}.json`);
-  return JSON.parse(fs.readFileSync(filePath, `utf-8`));
-};
-/**
  * Get cached page query result for given page path.
  * @param {string} pagePath Path to a page.
  * @param {string} directory Root directory of current project.
  */
-
-
 const getCachedPageData = (pagePath, directory) => {
-  const _store$getState = store.getState(),
-        jsonDataPaths = _store$getState.jsonDataPaths,
-        pages = _store$getState.pages;
+  const fixedPagePath = pagePath === `/` ? `index` : pagePath;
+  const filePath = path.join(directory, `public`, `page-data`, fixedPagePath, `page-data.json`);
 
-  const page = pages.get(pagePath);
-
-  if (!page) {
+  try {
+    const fileResult = fs.readFileSync(filePath, `utf-8`);
+    return Object.assign({}, JSON.parse(fileResult), {
+      id: pagePath
+    });
+  } catch (err) {
     return null;
   }
-
-  const dataPath = jsonDataPaths[page.jsonName];
-
-  if (typeof dataPath === `undefined`) {
-    console.log(`Error loading a result for the page query in "${pagePath}". Query was not run and no cached result was found.`);
-    return undefined;
-  }
-
-  return {
-    result: readCachedResults(dataPath, directory),
-    id: pagePath
-  };
 };
 /**
  * Get cached StaticQuery results for components that Gatsby didn't run query yet.
@@ -60,24 +39,24 @@ const getCachedPageData = (pagePath, directory) => {
 const getCachedStaticQueryResults = (resultsMap, directory) => {
   const cachedStaticQueryResults = new Map();
 
-  const _store$getState2 = store.getState(),
-        staticQueryComponents = _store$getState2.staticQueryComponents,
-        jsonDataPaths = _store$getState2.jsonDataPaths;
+  const _store$getState = store.getState(),
+        staticQueryComponents = _store$getState.staticQueryComponents;
 
   staticQueryComponents.forEach(staticQueryComponent => {
     // Don't read from file if results were already passed from query runner
     if (resultsMap.has(staticQueryComponent.hash)) return;
-    const dataPath = jsonDataPaths[staticQueryComponent.jsonName];
+    const filePath = path.join(directory, `public`, `static`, `d`, `${staticQueryComponent.hash}.json`);
+    const fileResult = fs.readFileSync(filePath, `utf-8`);
 
-    if (typeof dataPath === `undefined`) {
+    if (fileResult === `undefined`) {
       console.log(`Error loading a result for the StaticQuery in "${staticQueryComponent.componentPath}". Query was not run and no cached result was found.`);
       return;
     }
 
-    cachedStaticQueryResults.set(staticQueryComponent.hash, {
-      result: readCachedResults(dataPath, directory),
+    const jsonResult = JSON.parse(fileResult);
+    cachedStaticQueryResults.set(staticQueryComponent.hash, Object.assign({}, jsonResult, {
       id: staticQueryComponent.hash
-    });
+    }));
   });
   return cachedStaticQueryResults;
 };

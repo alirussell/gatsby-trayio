@@ -1,15 +1,7 @@
 import React from "react"
-import fs from "fs"
-
 import DevelopStaticEntry from "../develop-static-entry"
 
-jest.mock(`fs`, () => {
-  const fs = jest.requireActual(`fs`)
-  return {
-    ...fs,
-    readFileSync: jest.fn(),
-  }
-})
+jest.mock(`fs`)
 jest.mock(`gatsby/package.json`, () => {
   return {
     version: `2.0.0`,
@@ -30,39 +22,15 @@ jest.mock(
   }
 )
 
-jest.mock(
-  `../data.json`,
-  () => {
-    return {
-      dataPaths: [
-        {
-          [`about.json`]: `/400/about`,
-        },
-      ],
-      pages: [
-        {
-          path: `/about/`,
-          componentChunkName: `page-component---src-pages-test-js`,
-          jsonName: `about.json`,
-        },
-      ],
-    }
-  },
-  {
-    virtual: true,
-  }
-)
-
 const MOCK_FILE_INFO = {
   [`${process.cwd()}/public/webpack.stats.json`]: `{}`,
   [`${process.cwd()}/public/chunk-map.json`]: `{}`,
 }
 
-let StaticEntry
-beforeEach(() => {
-  fs.readFileSync.mockImplementation(file => MOCK_FILE_INFO[file])
-  StaticEntry = require(`../static-entry`).default
-})
+require(`fs`).__setMockFiles(MOCK_FILE_INFO)
+
+// Needs to be imported after __setMockFiles is called, and imports get hoisted.
+const StaticEntry = require(`../static-entry`).default
 
 const reverseHeadersPlugin = {
   plugin: {

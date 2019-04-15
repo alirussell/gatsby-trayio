@@ -20,7 +20,7 @@ export default function socketIo() {
 
         const didDataChange = (msg, queryData) =>
           !(msg.payload.id in queryData) ||
-          JSON.stringify(msg.payload.result) !==
+          JSON.stringify(msg.payload) !==
             JSON.stringify(queryData[msg.payload.id])
 
         socket.on(`message`, msg => {
@@ -28,14 +28,14 @@ export default function socketIo() {
             if (didDataChange(msg, staticQueryData)) {
               staticQueryData = {
                 ...staticQueryData,
-                [msg.payload.id]: msg.payload.result,
+                [msg.payload.id]: msg.payload,
               }
             }
           } else if (msg.type === `pageQueryResult`) {
             if (didDataChange(msg, pageQueryData)) {
               pageQueryData = {
                 ...pageQueryData,
-                [msg.payload.id]: msg.payload.result,
+                [msg.payload.id]: msg.payload,
               }
             }
           } else if (msg.type === `overlayError`) {

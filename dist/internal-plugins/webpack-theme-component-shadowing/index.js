@@ -12,29 +12,27 @@ const fs = require(`fs`);
 
 const _ = require(`lodash`);
 
-const pathWithoutExtension = fullPath => {
-  const parsed = path.parse(fullPath);
-  return path.join(parsed.dir, parsed.name);
-};
-
 module.exports = class GatsbyThemeComponentShadowingResolverPlugin {
   constructor({
     projectRoot,
     themes
   }) {
     (0, _defineProperty2.default)(this, "cache", {});
-    debug(`themes list`, themes.map(({
-      themeName
-    }) => themeName));
+    debug(`themes list`, themes);
     this.themes = themes;
     this.projectRoot = projectRoot;
   }
 
   apply(resolver) {
     resolver.plugin(`relative`, (request, callback) => {
-      const matchingThemes = this.getMatchingThemesForPath(request.path); // 0 matching themes happens a lot for paths we don't want to handle
+      // find out which theme's src/components dir we're requiring from
+      const allMatchingThemes = this.themes.filter(name => request.path.includes(path.join(name, `src`))); // The same theme can be included twice in the themes list causing multiple
+      // matches. This case should only be counted as a single match for that theme.
+
+      const matchingThemes = _.uniq(allMatchingThemes); // 0 matching themes happens a lot for paths we don't want to handle
       // > 1 matching theme means we have a path like
       //   `gatsby-theme-blog/src/components/gatsby-theme-something/src/components`
+
 
       if (matchingThemes.length > 1) {
         throw new Error(`Gatsby can't differentiate between themes ${matchingThemes.join(` and `)} for path ${request.path}`);
@@ -49,8 +47,6 @@ module.exports = class GatsbyThemeComponentShadowingResolverPlugin {
 
       const _request$path$split = request.path.split(path.join(theme, `src`)),
             component = _request$path$split[1];
-
-      if (
       /**
        * if someone adds
        * ```
@@ -61,26 +57,21 @@ module.exports = class GatsbyThemeComponentShadowingResolverPlugin {
        * like this in a theme, but we also shouldn't artificially break
        * people that do.
        */
-      request.context.issuer &&
-      /**
-       * An issuer is the file making the require request. It can
-       * be in a user's site or a theme. If the issuer is requesting
-       * a path in the shadow chain that it participates in, then we
-       * will let the request through as normal. Otherwise, we
-       * engage the shadowing algorithm.
-       */
-      this.requestPathIsIssuerShadowPath({
-        requestPath: request.path,
-        issuerPath: request.context.issuer
-      })) {
-        return resolver.doResolve(`describedRelative`, request, null, {}, callback);
-      } // This is the shadowing algorithm.
 
+
+      if (request.context.issuer) {
+        const issuerExtension = path.extname(request.context.issuer);
+
+        if (request.context.issuer.slice(0, -issuerExtension.length).endsWith(component)) {
+          return resolver.doResolve(`describedRelative`, request, null, {}, callback);
+        }
+      }
 
       const builtComponentPath = this.resolveComponentPath({
         matchingTheme: theme,
         themes: this.themes,
-        component
+        component,
+        projectRoot: this.projectRoot
       });
       return resolver.doResolve(`describedRelative`, Object.assign({}, request, {
         path: builtComponentPath || request.path
@@ -92,17 +83,14 @@ module.exports = class GatsbyThemeComponentShadowingResolverPlugin {
   resolveComponentPath({
     matchingTheme: theme,
     themes: ogThemes,
-    component
+    component,
+    projectRoot
   }) {
     // don't include matching theme in possible shadowing paths
-    const themes = ogThemes.filter(({
-      themeName
-    }) => themeName !== theme);
+    const themes = ogThemes.filter(t => t !== theme);
 
     if (!this.cache[`${theme}-${component}`]) {
-      this.cache[`${theme}-${component}`] = [path.join(path.resolve(`.`), `src`, theme)].concat(Array.from(themes).reverse().map(({
-        themeDir
-      }) => path.join(themeDir, `src`, theme))).map(dir => path.join(dir, component)).find(possibleComponentPath => {
+      this.cache[`${theme}-${component}`] = [path.join(path.resolve(`.`), `src`, theme)].concat(Array.from(themes).reverse().map(aTheme => path.join(path.dirname(require.resolve(aTheme)), `src`, theme))).map(dir => path.join(dir, component)).find(possibleComponentPath => {
         debug(`possibleComponentPath`, possibleComponentPath);
         let dir;
 
@@ -124,54 +112,6 @@ module.exports = class GatsbyThemeComponentShadowingResolverPlugin {
     }
 
     return this.cache[`${theme}-${component}`];
-  }
-
-  getMatchingThemesForPath(filepath) {
-    // find out which theme's src/components dir we're requiring from
-    const allMatchingThemes = this.themes.filter(({
-      themeName
-    }) => filepath.includes(path.join(themeName, `src`))); // The same theme can be included twice in the themes list causing multiple
-    // matches. This case should only be counted as a single match for that theme.
-
-    return _.uniq(allMatchingThemes.map(({
-      themeName
-    }) => themeName));
-  } // given a theme name, return all of the possible shadow locations
-
-
-  getBaseShadowDirsForThemes(theme) {
-    return Array.from(this.themes).reverse().map(({
-      themeName,
-      themeDir
-    }) => {
-      if (themeName === theme) {
-        return path.join(themeDir, `src`);
-      } else {
-        return path.join(themeDir, `src`, theme);
-      }
-    });
-  }
-
-  requestPathIsIssuerShadowPath({
-    requestPath,
-    issuerPath
-  }) {
-    // get the issuer's theme
-    const matchingThemes = this.getMatchingThemesForPath(requestPath);
-
-    if (matchingThemes.length !== 1) {
-      return false;
-    }
-
-    const theme = matchingThemes[0]; // get the location of the component relative to src/
-
-    const _requestPath$split = requestPath.split(path.join(theme, `src`)),
-          component = _requestPath$split[1]; // get list of potential shadow locations
-
-
-    const shadowFiles = this.getBaseShadowDirsForThemes(theme).map(dir => path.join(dir, component)); // if the issuer is requesting a path that is a potential shadow path of itself
-
-    return shadowFiles.includes(pathWithoutExtension(issuerPath));
   }
 
 };

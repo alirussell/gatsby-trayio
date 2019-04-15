@@ -31,7 +31,6 @@ function () {
           schema = _store$getState.schema,
           config = _store$getState.config,
           babelrc = _store$getState.babelrc,
-          jsonDataPaths = _store$getState.jsonDataPaths,
           pages = _store$getState.pages,
           components = _store$getState.components,
           staticQueryComponents = _store$getState.staticQueryComponents;
@@ -59,7 +58,6 @@ function () {
 
     _.context.babelrc = babelrc;
     _.context.components = components;
-    _.context.dataPaths = jsonDataPaths;
     _.context.getNode = getNode;
     _.context.getNodes = getNodes;
     _.context.getNodesByType = getNodesByType;

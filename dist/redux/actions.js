@@ -246,19 +246,15 @@ ${reservedFields.map(f => `  * "${f}"`).join(`\n`)}
     report.panic(`See the documentation for createPage https://www.gatsbyjs.org/docs/actions/#createPage`);
   }
 
-  let jsonName;
   let internalComponentName;
 
   if (page.path === `/`) {
-    jsonName = `index`;
     internalComponentName = `ComponentIndex`;
   } else {
-    jsonName = `${kebabHash(page.path)}`;
     internalComponentName = `Component${pascalCase(page.path)}`;
   }
 
   let internalPage = {
-    jsonName,
     internalComponentName,
     path: page.path,
     matchPath: page.matchPath,
@@ -533,7 +529,7 @@ actions.createNode = (node, plugin, actionOptions = {}) => {
     `);
   }
 
-  node = trackInlineObjectsInRootNode(node, true);
+  trackInlineObjectsInRootNode(node);
   const oldNode = getNode(node.id); // Ensure the plugin isn't creating a node type owned by another
   // plugin. Type "ownership" is first come first served.
 

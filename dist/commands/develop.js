@@ -34,7 +34,8 @@ const webpackConfig = require(`../utils/webpack.config`);
 const bootstrap = require(`../bootstrap`);
 
 const _require2 = require(`../redux`),
-      store = _require2.store;
+      store = _require2.store,
+      emitter = _require2.emitter;
 
 const _require3 = require(`../utils/get-static-dir`),
       syncStaticDir = _require3.syncStaticDir;
@@ -69,19 +70,19 @@ const _require5 = require(`../utils/tracer`),
 
 const apiRunnerNode = require(`../utils/api-runner-node`);
 
-const db = require(`../db`);
-
 const telemetry = require(`gatsby-telemetry`);
+
+const queryRunner = require(`../query`);
+
+const queryWatcher = require(`../query/query-watcher`);
+
+const writeJsRequires = require(`../bootstrap/write-js-requires`);
+
+const db = require(`../db`);
 
 const detectPortInUseAndPrompt = require(`../utils/detect-port-in-use-and-prompt`);
 
-const onExit = require(`signal-exit`);
-
-const pageQueryRunner = require(`../query/page-query-runner`);
-
-const queryQueue = require(`../query/queue`);
-
-const queryWatcher = require(`../query/query-watcher`); // const isInteractive = process.stdout.isTTY
+const onExit = require(`signal-exit`); // const isInteractive = process.stdout.isTTY
 // Watch the static directory and copy files to public as they're added or
 // changed. Wait 10 seconds so copying doesn't interfere with the regular
 // bootstrap.
@@ -98,11 +99,106 @@ const rlInterface = rl.createInterface({
 rlInterface.on(`SIGINT`, () => {
   process.exit();
 });
+
+function startQueryListener() {
+  const processing = new Set();
+  const waiting = new Map();
+  const betterQueueOptions = {
+    priority: (job, cb) => {
+      const activePaths = Array.from(websocketManager.activePaths.values());
+
+      if (job.id && activePaths.includes(job.id)) {
+        cb(null, 10);
+      } else {
+        cb(null, 1);
+      }
+    },
+    merge: (oldTask, newTask, cb) => {
+      cb(null, newTask);
+    },
+    filter: (job, cb) => {
+      if (processing.has(job.id)) {
+        waiting.set(job.id, job);
+        cb(`already running`);
+      } else {
+        cb(null, job);
+      }
+    }
+  };
+
+  const postHandler =
+  /*#__PURE__*/
+  function () {
+    var _ref = (0, _asyncToGenerator2.default)(function* ({
+      queryJob,
+      result
+    }) {
+      if (queryJob.isPage) {
+        websocketManager.emitPageData(Object.assign({}, result, {
+          id: queryJob.id
+        }));
+      } else {
+        websocketManager.emitStaticQueryData(Object.assign({}, result, {
+          id: queryJob.id
+        }));
+      }
+
+      processing.delete(queryJob.id);
+
+      if (waiting.has(queryJob.id)) {
+        queue.push(waiting.get(queryJob.id));
+        waiting.delete(queryJob.id);
+      }
+    });
+
+    return function postHandler(_x) {
+      return _ref.apply(this, arguments);
+    };
+  }();
+
+  const queue = queryRunner.createQueue({
+    postHandler,
+    betterQueueOptions
+  });
+  queryRunner.startListener(queue);
+}
+
+const runPageQueries =
+/*#__PURE__*/
+function () {
+  var _ref2 = (0, _asyncToGenerator2.default)(function* (queryIds) {
+    let activity = report.activityTimer(`run page queries`);
+    activity.start();
+    yield queryRunner.processPageQueries(queryIds, {
+      activity
+    });
+    activity.end();
+
+    require(`../redux/actions`).boundActionCreators.setProgramStatus(`BOOTSTRAP_QUERY_RUNNING_FINISHED`);
+  });
+
+  return function runPageQueries(_x2) {
+    return _ref2.apply(this, arguments);
+  };
+}();
+
+const waitJobsFinished = () => new Promise((resolve, reject) => {
+  const onEndJob = () => {
+    if (store.getState().jobs.active.length === 0) {
+      resolve();
+      emitter.off(`END_JOB`, onEndJob);
+    }
+  };
+
+  emitter.on(`END_JOB`, onEndJob);
+  onEndJob();
+});
+
 onExit(() => {
   telemetry.trackCli(`DEVELOP_STOP`);
 });
 
-function startServer(_x) {
+function startServer(_x3) {
   return _startServer.apply(this, arguments);
 }
 
@@ -114,11 +210,11 @@ function _startServer() {
     const createIndexHtml =
     /*#__PURE__*/
     function () {
-      var _ref3 = (0, _asyncToGenerator2.default)(function* () {
+      var _ref6 = (0, _asyncToGenerator2.default)(function* () {
         try {
+          yield buildHTML.buildRenderer(program, `develop-html`);
           yield buildHTML.buildPages({
             program,
-            stage: `develop-html`,
             pagePaths: [`/`]
           });
         } catch (err) {
@@ -136,15 +232,10 @@ function _startServer() {
       });
 
       return function createIndexHtml() {
-        return _ref3.apply(this, arguments);
+        return _ref6.apply(this, arguments);
       };
-    }(); // Start bootstrap process.
+    }();
 
-
-    yield bootstrap(program);
-    db.startAutosave();
-    pageQueryRunner.startListening(queryQueue.makeDevelop());
-    queryWatcher.startWatchDeletePage();
     yield createIndexHtml();
     const devConfig = yield webpackConfig(program, directory, `develop`, program.port);
     const compiler = webpack(devConfig);
@@ -180,7 +271,35 @@ function _startServer() {
         }
 
       };
-    })); // Allow requests from any origin. Avoids CORS issues when using the `--host` flag.
+    }));
+
+    const mapToObject = map => {
+      const obj = {};
+
+      for (var _iterator = map, _isArray = Array.isArray(_iterator), _i = 0, _iterator = _isArray ? _iterator : _iterator[Symbol.iterator]();;) {
+        var _ref7;
+
+        if (_isArray) {
+          if (_i >= _iterator.length) break;
+          _ref7 = _iterator[_i++];
+        } else {
+          _i = _iterator.next();
+          if (_i.done) break;
+          _ref7 = _i.value;
+        }
+
+        let _ref8 = _ref7,
+            key = _ref8[0],
+            value = _ref8[1];
+        obj[key] = value;
+      }
+
+      return obj;
+    };
+
+    app.get(`/___pages`, (req, res) => {
+      res.json(mapToObject(store.getState().pages));
+    }); // Allow requests from any origin. Avoids CORS issues when using the `--host` flag.
 
     app.use((req, res, next) => {
       res.header(`Access-Control-Allow-Origin`, `*`);
@@ -298,7 +417,7 @@ function _startServer() {
 module.exports =
 /*#__PURE__*/
 function () {
-  var _ref = (0, _asyncToGenerator2.default)(function* (program) {
+  var _ref3 = (0, _asyncToGenerator2.default)(function* (program) {
     initTracer(program.openTracingConfigFile);
     telemetry.trackCli(`DEVELOP_START`);
     telemetry.startBackgroundUpdate();
@@ -321,10 +440,11 @@ function () {
       });
     }
 
-    program.port = yield detectPortInUseAndPrompt(port, rlInterface);
-
-    const _ref2 = yield startServer(program),
-          compiler = _ref2[0];
+    program.port = yield new Promise(resolve => {
+      detectPortInUseAndPrompt(port, rlInterface, newPort => {
+        resolve(newPort);
+      });
+    });
 
     function prepareUrls(protocol, host, port) {
       const formatUrl = hostname => url.format({
@@ -428,7 +548,37 @@ function () {
           console.log();
         }
       });
-    }
+    } // Start bootstrap process.
+
+
+    const _ref4 = yield bootstrap(program),
+          graphqlRunner = _ref4.graphqlRunner; // Start the createPages hot reloader.
+
+
+    require(`../bootstrap/page-hot-reloader`)(graphqlRunner);
+
+    const queryIds = queryRunner.calcBootstrapDirtyQueryIds(store.getState());
+
+    const _queryRunner$groupQue = queryRunner.groupQueryIds(queryIds),
+          staticQueryIds = _queryRunner$groupQue.staticQueryIds,
+          pageQueryIds = _queryRunner$groupQue.pageQueryIds;
+
+    let activity = report.activityTimer(`run static queries`);
+    activity.start();
+    yield queryRunner.processStaticQueries(staticQueryIds, {
+      activity
+    });
+    activity.end();
+    yield runPageQueries(pageQueryIds);
+    yield waitJobsFinished();
+    yield writeJsRequires.startPageListener();
+    yield db.saveState();
+    db.startAutosave();
+    startQueryListener();
+    queryWatcher.startWatchDeletePage();
+
+    const _ref5 = yield startServer(program),
+          compiler = _ref5[0];
 
     let isFirstCompile = true; // "done" event fires when Webpack has finished recompiling the bundle.
     // Whether or not you have warnings or errors, you will get this event.
@@ -485,8 +635,8 @@ function () {
     });
   });
 
-  return function (_x2) {
-    return _ref.apply(this, arguments);
+  return function (_x4) {
+    return _ref3.apply(this, arguments);
   };
 }();
 //# sourceMappingURL=develop.js.map

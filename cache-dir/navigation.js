@@ -18,7 +18,7 @@ function maybeRedirect(pathname) {
 
   if (redirect != null) {
     if (process.env.NODE_ENV !== `production`) {
-      const pageResources = loader.getResourcesForPathnameSync(pathname)
+      const pageResources = loader.getPage(pathname)
 
       if (pageResources != null) {
         console.error(
@@ -81,7 +81,19 @@ const navigate = (to, options = {}) => {
     })
   }, 1000)
 
-  loader.getResourcesForPathname(pathname).then(pageResources => {
+  loader.loadPage(pathname).then(pageResources => {
+    // If the loaded page has a different compilation hash to the
+    // window, then a rebuild has occurred on the server. Reload.
+    if (process.env.NODE_ENV === `production` && pageResources) {
+      if (pageResources.page.compilationHash !== window.___compilationHash) {
+        console.log(
+          `compilation has different. window = ${
+            window.___compilationHash
+          }, page = ${pageResources.page.compilationHash}`
+        )
+        window.location = pathname
+      }
+    }
     reachNavigate(to, options)
     clearTimeout(timeoutId)
   })

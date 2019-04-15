@@ -1,6 +1,7 @@
 const _ = require(`lodash`)
 const prepareRegex = require(`../../utils/prepare-regex`)
 const { getNodeTypeCollection } = require(`./nodes`)
+const sift = require(`sift`)
 const { emitter } = require(`../../redux`)
 
 // Cleared on DELETE_CACHE
@@ -12,6 +13,49 @@ emitter.on(`DELETE_CACHE`, () => {
     delete fieldUsages[field]
   }
 })
+
+// Takes a raw graphql filter and converts it into a mongo-like args
+// object that can be understood by the `sift` library. E.g `eq`
+// becomes `$eq`
+function siftifyArgs(object) {
+  const newObject = {}
+  _.each(object, (v, k) => {
+    if (_.isPlainObject(v)) {
+      if (k === `elemMatch`) {
+        k = `$elemMatch`
+      }
+      newObject[k] = siftifyArgs(v)
+    } else {
+      // Compile regex first.
+      if (k === `regex`) {
+        newObject[`$regex`] = prepareRegex(v)
+      } else if (k === `glob`) {
+        const Minimatch = require(`minimatch`).Minimatch
+        const mm = new Minimatch(v)
+        newObject[`$regex`] = mm.makeRe()
+      } else {
+        newObject[`$${k}`] = v
+      }
+    }
+  })
+  return newObject
+}
+
+// filter nodes using the `sift` library. But isn't this a loki query
+// file? Yes, but we need to support all functionality provided by
+// `run-sift`, and there are some operators that loki can't
+// support. Like `elemMatch`, so for those fields, we fall back to
+// sift
+function runSift(nodes, query) {
+  if (nodes) {
+    const siftQuery = {
+      $elemMatch: siftifyArgs(query),
+    }
+    return sift(siftQuery, nodes)
+  } else {
+    return null
+  }
+}
 
 // Takes a raw graphql filter and converts it into a mongo-like args
 // object that can be understood by loki. E.g `eq` becomes
@@ -52,8 +96,12 @@ function toMongoArgs(gqlFilter, lastFieldType) {
   _.each(gqlFilter, (v, k) => {
     if (_.isPlainObject(v)) {
       if (k === `elemMatch`) {
-        const gqlFieldType = lastFieldType.ofType
-        mongoArgs[`$elemMatch`] = toMongoArgs(v, gqlFieldType)
+        // loki doesn't support elemMatch, so use sift (see runSift
+        // comment above)
+        mongoArgs[`$where`] = obj => {
+          const result = runSift(obj, v)
+          return result && result.length > 0
+        }
       } else {
         const gqlFieldType = lastFieldType.getFields()[k].type
         mongoArgs[k] = toMongoArgs(v, gqlFieldType)
@@ -141,9 +189,7 @@ const toDottedFields = (filter, acc = {}, path = []) => {
   Object.keys(filter).forEach(key => {
     const value = filter[key]
     const nextValue = _.isPlainObject(value) && value[Object.keys(value)[0]]
-    if (key === `$elemMatch`) {
-      acc[path.join(`.`)] = { [`$elemMatch`]: toDottedFields(value) }
-    } else if (_.isPlainObject(nextValue)) {
+    if (_.isPlainObject(nextValue)) {
       toDottedFields(value, acc, path.concat(key))
     } else {
       acc[path.concat(key).join(`.`)] = value
@@ -186,7 +232,8 @@ const convertArgs = (gqlArgs, gqlType) =>
 
 // Converts graphql Sort args into the form expected by loki, which is
 // a vector where the first value is a field name, and the second is a
-// boolean `isDesc`. E.g
+// boolean `isDesc`. Nested fields delimited by `___` are replaced by
+// periods. E.g
 //
 // {
 //   fields: [ `frontmatter___date`, `id` ],
@@ -231,7 +278,7 @@ function ensureFieldIndexes(coll, lokiArgs) {
  *
  * @param {Object} args. Object with:
  *
- * {Object} gqlType: A GraphQL type
+ * {Object} gqlType: built during `./build-node-types.js`
  *
  * {Object} queryArgs: The raw graphql query as a js object. E.g `{
  * filter: { fields { slug: { eq: "/somepath" } } } }`
